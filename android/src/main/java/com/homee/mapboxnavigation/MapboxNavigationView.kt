@@ -9,6 +9,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.Toast
+import android.graphics.Color
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.uimanager.ThemedReactContext
@@ -62,6 +63,7 @@ import com.mapbox.navigation.ui.maps.route.arrow.model.RouteArrowOptions
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineOptions
+import com.mapbox.navigation.ui.maps.route.line.model.RouteLineColorResources
 import com.mapbox.navigation.ui.maps.route.line.model.RouteLine
 import com.mapbox.navigation.ui.tripprogress.api.MapboxTripProgressApi
 import com.mapbox.navigation.ui.tripprogress.model.DistanceRemainingFormatter
@@ -78,6 +80,7 @@ import com.mapbox.navigation.ui.voice.model.SpeechValue
 import com.mapbox.navigation.ui.voice.model.SpeechVolume
 import java.util.Locale
 import com.facebook.react.uimanager.events.RCTEventEmitter
+import com.mapbox.navigation.ui.maps.route.line.model.RouteLineResources
 
 class MapboxNavigationView(private val context: ThemedReactContext, private val accessToken: String?) :
     FrameLayout(context.baseContext) {
@@ -323,6 +326,10 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         if (style != null) {
             val maneuverArrowResult = routeArrowApi.addUpcomingManeuverArrow(routeProgress)
             routeArrowView.renderManeuverUpdate(style, maneuverArrowResult)
+
+            routeLineApi.updateWithRouteProgress(routeProgress) { result ->
+                 routeLineView.renderRouteLineUpdate(style, result)
+            }
         }
 
         // update top banner with maneuver instructions
@@ -477,7 +484,6 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         }
 
         mapboxMap = binding.mapView.getMapboxMap()
-
         // initialize the location puck
         binding.mapView.location.apply {
             this.locationPuck = LocationPuck2D(
@@ -585,11 +591,13 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         // the route line below road labels layer on the map
         // the value of this option will depend on the style that you are using
         // and under which layer the route line should be placed on the map layers stack
-        val mapboxRouteLineOptions = MapboxRouteLineOptions.Builder(context)
-            .withRouteLineBelowLayerId("road-label")
-            .build()
-        routeLineApi = MapboxRouteLineApi(mapboxRouteLineOptions)
-        routeLineView = MapboxRouteLineView(mapboxRouteLineOptions)
+
+
+//        val customColorResources = RouteLineColorResources.Builder()
+//            .inActiveRouteLegsColor(Color.parseColor("#55FFCC00"))
+//            .build()
+
+
 
         // initialize maneuver arrow view to draw arrows on the map
         val routeArrowOptions = RouteArrowOptions.Builder(context).build()
@@ -600,6 +608,32 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         mapboxMap.loadStyleUri(
             Style.MAPBOX_STREETS
         )
+
+
+        val customColorResources = RouteLineColorResources.Builder()
+            .routeDefaultColor(Color.parseColor("#454B1B"))
+            .inActiveRouteLegsColor(Color.parseColor("#FFCC00"))
+            .build()
+
+
+
+
+
+
+        val routeLineResources = RouteLineResources.Builder()
+            .routeLineColorResources(customColorResources)
+            .build()
+
+        val mapboxRouteLineOptions = MapboxRouteLineOptions.Builder(context)
+            .withRouteLineBelowLayerId("road-label")
+            .withVanishingRouteLineEnabled(true)
+            .styleInactiveRouteLegsIndependently(true)
+            .withRouteLineResources(routeLineResources)
+            .build()
+
+
+        routeLineApi = MapboxRouteLineApi(mapboxRouteLineOptions)
+        routeLineView = MapboxRouteLineView(mapboxRouteLineOptions)
 
         // initialize view interactions
         binding.stop.setOnClickListener {
@@ -622,6 +656,16 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             // mute/unmute voice instructions
             isVoiceInstructionsMuted = !isVoiceInstructionsMuted
         }
+
+        binding.next.setOnClickListener {
+            val event = Arguments.createMap()
+            event.putString("onSkip", "Navigation Closed")
+            context
+                .getJSModule(RCTEventEmitter::class.java)
+                .receiveEvent(id, "onSkip", event)
+        }
+
+//        binding.next.set
 
         // set initial sounds button state
         binding.soundButton.unmute()
@@ -677,7 +721,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             mapboxNavigation.requestRoutes(
                 RouteOptions.builder()
                     .applyDefaultNavigationOptions()
-//                    .applyLanguageAndVoiceUnitOptions(context)
+                    .applyLanguageAndVoiceUnitOptions(context)
                     .coordinatesList(listbhai)
                     .language(this.applanguage)
                     .profile(DirectionsCriteria.PROFILE_DRIVING)
@@ -735,7 +779,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         binding.soundButton.visibility = View.VISIBLE
         binding.routeOverview.visibility = View.INVISIBLE
         binding.tripProgressCard.visibility = View.VISIBLE
-
+        binding.next.visibility = View.VISIBLE
         // move the camera to overview when new route is available
         navigationCamera.requestNavigationCameraToFollowing()
     }
@@ -752,6 +796,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         binding.maneuverView.visibility = View.INVISIBLE
         binding.routeOverview.visibility = View.INVISIBLE
         binding.tripProgressCard.visibility = View.INVISIBLE
+        binding.next.visibility = View.INVISIBLE
     }
 
     private fun startSimulation(route: DirectionsRoute) {
