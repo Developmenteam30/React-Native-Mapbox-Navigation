@@ -3,16 +3,19 @@ package com.homee.mapboxnavigation
 import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.content.res.Resources
+import android.graphics.Color
 import android.location.Location
 import android.location.LocationManager
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.Toast
-import android.graphics.Color
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.events.RCTEventEmitter
+import com.homee.mapboxnavigation.databinding.NavigationViewBinding
+import com.mapbox.api.directions.v5.DirectionsCriteria
 import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.bindgen.Expected
@@ -31,8 +34,11 @@ import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.RouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.base.route.RouterOrigin
+import com.mapbox.navigation.base.trip.model.RouteLegProgress
+import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.MapboxNavigationProvider
+import com.mapbox.navigation.core.arrival.ArrivalObserver
 import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.formatter.MapboxDistanceFormatter
 import com.mapbox.navigation.core.replay.MapboxReplayer
@@ -43,11 +49,6 @@ import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 import com.mapbox.navigation.core.trip.session.VoiceInstructionsObserver
-import com.homee.mapboxnavigation.databinding.NavigationViewBinding
-import com.mapbox.api.directions.v5.DirectionsCriteria
-import com.mapbox.navigation.base.trip.model.RouteLegProgress
-import com.mapbox.navigation.base.trip.model.RouteProgress
-import com.mapbox.navigation.core.arrival.ArrivalObserver
 import com.mapbox.navigation.ui.base.util.MapboxNavigationConsumer
 import com.mapbox.navigation.ui.maneuver.api.MapboxManeuverApi
 import com.mapbox.navigation.ui.maneuver.view.MapboxManeuverView
@@ -63,14 +64,11 @@ import com.mapbox.navigation.ui.maps.route.arrow.model.RouteArrowOptions
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineOptions
-import com.mapbox.navigation.ui.maps.route.line.model.RouteLineColorResources
 import com.mapbox.navigation.ui.maps.route.line.model.RouteLine
+import com.mapbox.navigation.ui.maps.route.line.model.RouteLineColorResources
+import com.mapbox.navigation.ui.maps.route.line.model.RouteLineResources
 import com.mapbox.navigation.ui.tripprogress.api.MapboxTripProgressApi
-import com.mapbox.navigation.ui.tripprogress.model.DistanceRemainingFormatter
-import com.mapbox.navigation.ui.tripprogress.model.EstimatedTimeToArrivalFormatter
-import com.mapbox.navigation.ui.tripprogress.model.PercentDistanceTraveledFormatter
-import com.mapbox.navigation.ui.tripprogress.model.TimeRemainingFormatter
-import com.mapbox.navigation.ui.tripprogress.model.TripProgressUpdateFormatter
+import com.mapbox.navigation.ui.tripprogress.model.*
 import com.mapbox.navigation.ui.tripprogress.view.MapboxTripProgressView
 import com.mapbox.navigation.ui.voice.api.MapboxSpeechApi
 import com.mapbox.navigation.ui.voice.api.MapboxVoiceInstructionsPlayer
@@ -78,9 +76,7 @@ import com.mapbox.navigation.ui.voice.model.SpeechAnnouncement
 import com.mapbox.navigation.ui.voice.model.SpeechError
 import com.mapbox.navigation.ui.voice.model.SpeechValue
 import com.mapbox.navigation.ui.voice.model.SpeechVolume
-import java.util.Locale
-import com.facebook.react.uimanager.events.RCTEventEmitter
-import com.mapbox.navigation.ui.maps.route.line.model.RouteLineResources
+import java.util.*
 
 class MapboxNavigationView(private val context: ThemedReactContext, private val accessToken: String?) :
     FrameLayout(context.baseContext) {
@@ -175,7 +171,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             40.0 * pixelDensity
         )
     }
-    private var applanguage: String = "en"
+    private var applanguage: String = "fr"
 
     /**
      * Generates updates for the [MapboxManeuverView] to display the upcoming maneuver instructions
@@ -328,7 +324,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             routeArrowView.renderManeuverUpdate(style, maneuverArrowResult)
 
             routeLineApi.updateWithRouteProgress(routeProgress) { result ->
-                 routeLineView.renderRouteLineUpdate(style, result)
+                routeLineView.renderRouteLineUpdate(style, result)
             }
         }
 
@@ -414,6 +410,26 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
     private val arrivalObserver = object : ArrivalObserver {
 
         override fun onWaypointArrival(routeProgress: RouteProgress) {
+            val remainingWaypoints = routeProgress.remainingWaypoints
+            if (remainingWaypoints > 0) {
+                val reachedWaypointIndex = waypoints.size - remainingWaypoints // Assuming the first waypoint is at index 0
+                val reachedWaypoint = waypoints[reachedWaypointIndex]
+
+                val latitude = reachedWaypoint?.latitude()
+                val longitude = reachedWaypoint?.longitude()
+                val event = Arguments.createMap()
+                if (latitude != null) {
+                    event.putDouble("latitude", latitude.toDouble())
+                    if (longitude != null) {
+                        event.putDouble("longitude", longitude.toDouble())
+                    }
+                }
+                context
+                    .getJSModule(RCTEventEmitter::class.java)
+                    .receiveEvent(id, "onArrive", event)
+                // Now you have the latitude and longitude of the arrived waypoint
+                // Do whatever you need to do with this information
+            }
             // do something when the user arrives at a waypoint
         }
 
@@ -574,17 +590,17 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
                 )
                 .build()
         )
-
+        val frenchLocale = Locale("fr", "FR")
         // initialize voice instructions api and the voice instruction player
         speechApi = MapboxSpeechApi(
             context,
             accessToken,
-            Locale.US.language
+            frenchLocale.getLanguage()
         )
         voiceInstructionsPlayer = MapboxVoiceInstructionsPlayer(
             context,
             accessToken,
-            Locale.US.language
+            frenchLocale.getLanguage()
         )
 
         // initialize route line, the withRouteLineBelowLayerId is specified to place
@@ -644,6 +660,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
                 .getJSModule(RCTEventEmitter::class.java)
                 .receiveEvent(id, "onCancelNavigation", event)
         }
+
         binding.recenter.setOnClickListener {
             navigationCamera.requestNavigationCameraToFollowing()
             binding.routeOverview.showTextAndExtend(BUTTON_ANIMATION_DURATION)
