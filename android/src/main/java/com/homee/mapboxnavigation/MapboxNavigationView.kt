@@ -3,6 +3,7 @@ package com.homee.mapboxnavigation
 import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.content.res.Resources
+import android.graphics.Color
 import android.location.Location
 import android.location.LocationManager
 import android.view.LayoutInflater
@@ -12,6 +13,9 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.events.RCTEventEmitter
+import com.homee.mapboxnavigation.databinding.NavigationViewBinding
+import com.mapbox.api.directions.v5.DirectionsCriteria
 import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.bindgen.Expected
@@ -30,8 +34,11 @@ import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.RouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.base.route.RouterOrigin
+import com.mapbox.navigation.base.trip.model.RouteLegProgress
+import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.MapboxNavigationProvider
+import com.mapbox.navigation.core.arrival.ArrivalObserver
 import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.formatter.MapboxDistanceFormatter
 import com.mapbox.navigation.core.replay.MapboxReplayer
@@ -42,11 +49,6 @@ import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 import com.mapbox.navigation.core.trip.session.VoiceInstructionsObserver
-import com.homee.mapboxnavigation.databinding.NavigationViewBinding
-import com.mapbox.api.directions.v5.DirectionsCriteria
-import com.mapbox.navigation.base.trip.model.RouteLegProgress
-import com.mapbox.navigation.base.trip.model.RouteProgress
-import com.mapbox.navigation.core.arrival.ArrivalObserver
 import com.mapbox.navigation.ui.base.util.MapboxNavigationConsumer
 import com.mapbox.navigation.ui.maneuver.api.MapboxManeuverApi
 import com.mapbox.navigation.ui.maneuver.view.MapboxManeuverView
@@ -63,12 +65,10 @@ import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineOptions
 import com.mapbox.navigation.ui.maps.route.line.model.RouteLine
+import com.mapbox.navigation.ui.maps.route.line.model.RouteLineColorResources
+import com.mapbox.navigation.ui.maps.route.line.model.RouteLineResources
 import com.mapbox.navigation.ui.tripprogress.api.MapboxTripProgressApi
-import com.mapbox.navigation.ui.tripprogress.model.DistanceRemainingFormatter
-import com.mapbox.navigation.ui.tripprogress.model.EstimatedTimeToArrivalFormatter
-import com.mapbox.navigation.ui.tripprogress.model.PercentDistanceTraveledFormatter
-import com.mapbox.navigation.ui.tripprogress.model.TimeRemainingFormatter
-import com.mapbox.navigation.ui.tripprogress.model.TripProgressUpdateFormatter
+import com.mapbox.navigation.ui.tripprogress.model.*
 import com.mapbox.navigation.ui.tripprogress.view.MapboxTripProgressView
 import com.mapbox.navigation.ui.voice.api.MapboxSpeechApi
 import com.mapbox.navigation.ui.voice.api.MapboxVoiceInstructionsPlayer
@@ -76,8 +76,7 @@ import com.mapbox.navigation.ui.voice.model.SpeechAnnouncement
 import com.mapbox.navigation.ui.voice.model.SpeechError
 import com.mapbox.navigation.ui.voice.model.SpeechValue
 import com.mapbox.navigation.ui.voice.model.SpeechVolume
-import java.util.Locale
-import com.facebook.react.uimanager.events.RCTEventEmitter
+import java.util.*
 
 class MapboxNavigationView(private val context: ThemedReactContext, private val accessToken: String?) :
     FrameLayout(context.baseContext) {
@@ -172,7 +171,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             40.0 * pixelDensity
         )
     }
-    private var applanguage: String = "en"
+    private var applanguage: String = "fr"
 
     /**
      * Generates updates for the [MapboxManeuverView] to display the upcoming maneuver instructions
@@ -323,6 +322,10 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         if (style != null) {
             val maneuverArrowResult = routeArrowApi.addUpcomingManeuverArrow(routeProgress)
             routeArrowView.renderManeuverUpdate(style, maneuverArrowResult)
+
+            routeLineApi.updateWithRouteProgress(routeProgress) { result ->
+                routeLineView.renderRouteLineUpdate(style, result)
+            }
         }
 
         // update top banner with maneuver instructions
@@ -407,6 +410,26 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
     private val arrivalObserver = object : ArrivalObserver {
 
         override fun onWaypointArrival(routeProgress: RouteProgress) {
+            val remainingWaypoints = routeProgress.remainingWaypoints
+            if (remainingWaypoints > 0) {
+                val reachedWaypointIndex = waypoints.size - remainingWaypoints // Assuming the first waypoint is at index 0
+                val reachedWaypoint = waypoints[reachedWaypointIndex]
+
+                val latitude = reachedWaypoint?.latitude()
+                val longitude = reachedWaypoint?.longitude()
+                val event = Arguments.createMap()
+                if (latitude != null) {
+                    event.putDouble("latitude", latitude.toDouble())
+                    if (longitude != null) {
+                        event.putDouble("longitude", longitude.toDouble())
+                    }
+                }
+                context
+                    .getJSModule(RCTEventEmitter::class.java)
+                    .receiveEvent(id, "onArrive", event)
+                // Now you have the latitude and longitude of the arrived waypoint
+                // Do whatever you need to do with this information
+            }
             // do something when the user arrives at a waypoint
         }
 
@@ -477,7 +500,6 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         }
 
         mapboxMap = binding.mapView.getMapboxMap()
-
         // initialize the location puck
         binding.mapView.location.apply {
             this.locationPuck = LocationPuck2D(
@@ -568,28 +590,30 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
                 )
                 .build()
         )
-
+        val frenchLocale = Locale("fr", "FR")
         // initialize voice instructions api and the voice instruction player
         speechApi = MapboxSpeechApi(
             context,
             accessToken,
-            Locale.US.language
+            frenchLocale.getLanguage()
         )
         voiceInstructionsPlayer = MapboxVoiceInstructionsPlayer(
             context,
             accessToken,
-            Locale.US.language
+            frenchLocale.getLanguage()
         )
 
         // initialize route line, the withRouteLineBelowLayerId is specified to place
         // the route line below road labels layer on the map
         // the value of this option will depend on the style that you are using
         // and under which layer the route line should be placed on the map layers stack
-        val mapboxRouteLineOptions = MapboxRouteLineOptions.Builder(context)
-            .withRouteLineBelowLayerId("road-label")
-            .build()
-        routeLineApi = MapboxRouteLineApi(mapboxRouteLineOptions)
-        routeLineView = MapboxRouteLineView(mapboxRouteLineOptions)
+
+
+//        val customColorResources = RouteLineColorResources.Builder()
+//            .inActiveRouteLegsColor(Color.parseColor("#55FFCC00"))
+//            .build()
+
+
 
         // initialize maneuver arrow view to draw arrows on the map
         val routeArrowOptions = RouteArrowOptions.Builder(context).build()
@@ -601,6 +625,32 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             Style.MAPBOX_STREETS
         )
 
+
+        val customColorResources = RouteLineColorResources.Builder()
+            .routeDefaultColor(Color.parseColor("#454B1B"))
+            .inActiveRouteLegsColor(Color.parseColor("#FFCC00"))
+            .build()
+
+
+
+
+
+
+        val routeLineResources = RouteLineResources.Builder()
+            .routeLineColorResources(customColorResources)
+            .build()
+
+        val mapboxRouteLineOptions = MapboxRouteLineOptions.Builder(context)
+            .withRouteLineBelowLayerId("road-label")
+            .withVanishingRouteLineEnabled(true)
+            .styleInactiveRouteLegsIndependently(true)
+            .withRouteLineResources(routeLineResources)
+            .build()
+
+
+        routeLineApi = MapboxRouteLineApi(mapboxRouteLineOptions)
+        routeLineView = MapboxRouteLineView(mapboxRouteLineOptions)
+
         // initialize view interactions
         binding.stop.setOnClickListener {
 //            clearRouteAndStopNavigation() // TODO: figure out how we want to address this since a user cannot reinitialize a route once it is canceled.
@@ -610,6 +660,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
                 .getJSModule(RCTEventEmitter::class.java)
                 .receiveEvent(id, "onCancelNavigation", event)
         }
+
         binding.recenter.setOnClickListener {
             navigationCamera.requestNavigationCameraToFollowing()
             binding.routeOverview.showTextAndExtend(BUTTON_ANIMATION_DURATION)
@@ -622,6 +673,16 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             // mute/unmute voice instructions
             isVoiceInstructionsMuted = !isVoiceInstructionsMuted
         }
+
+        binding.next.setOnClickListener {
+            val event = Arguments.createMap()
+            event.putString("onSkip", "Navigation Closed")
+            context
+                .getJSModule(RCTEventEmitter::class.java)
+                .receiveEvent(id, "onSkip", event)
+        }
+
+//        binding.next.set
 
         // set initial sounds button state
         binding.soundButton.unmute()
@@ -677,7 +738,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
             mapboxNavigation.requestRoutes(
                 RouteOptions.builder()
                     .applyDefaultNavigationOptions()
-//                    .applyLanguageAndVoiceUnitOptions(context)
+                    .applyLanguageAndVoiceUnitOptions(context)
                     .coordinatesList(listbhai)
                     .language(this.applanguage)
                     .profile(DirectionsCriteria.PROFILE_DRIVING)
@@ -735,7 +796,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         binding.soundButton.visibility = View.VISIBLE
         binding.routeOverview.visibility = View.INVISIBLE
         binding.tripProgressCard.visibility = View.VISIBLE
-
+        binding.next.visibility = View.VISIBLE
         // move the camera to overview when new route is available
         navigationCamera.requestNavigationCameraToFollowing()
     }
@@ -752,6 +813,7 @@ class MapboxNavigationView(private val context: ThemedReactContext, private val 
         binding.maneuverView.visibility = View.INVISIBLE
         binding.routeOverview.visibility = View.INVISIBLE
         binding.tripProgressCard.visibility = View.INVISIBLE
+        binding.next.visibility = View.INVISIBLE
     }
 
     private fun startSimulation(route: DirectionsRoute) {
